@@ -1,0 +1,403 @@
+{
+  "name": "Vistage Community Prospecting — Hourly",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-a1b2c3d40001",
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 360]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Time Window Check (9 AM – 8 PM Eastern) ──────────────────────────────\nconst now = new Date();\nconst etFormatter = new Intl.DateTimeFormat('en-US', {\n  timeZone: 'America/New_York',\n  hour: 'numeric',\n  hour12: false\n});\nconst etHour = parseInt(etFormatter.format(now), 10);\n\nif (etHour < 9 || etHour >= 20) {\n  return [];\n}\n\nreturn [{ json: { etHour, timestamp: now.toISOString(), active: true } }];"
+      },
+      "id": "a1b2c3d4-0002-0002-0002-a1b2c3d40002",
+      "name": "Time Window Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 360]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Load Crawl State (uses n8n workflow static data — persists across runs) ──\nconst staticData = $getWorkflowStaticData('global');\n\nconst state = {\n  processedProfileUrls: staticData.processedProfileUrls || [],\n  processedThreadUrls: staticData.processedThreadUrls || [],\n  processedNameCompanyKeys: staticData.processedNameCompanyKeys || [],\n  googleSheetId: staticData.googleSheetId || $env.VISTAGE_SHEET_ID || '',\n  totalDiscoveredAllTime: staticData.totalDiscoveredAllTime || 0,\n  lastRunAt: staticData.lastRunAt || null,\n  lastRunNewCount: staticData.lastRunNewCount || 0,\n  runHistory: staticData.runHistory || []\n};\n\nconsole.log(`State loaded. Total discovered all-time: ${state.totalDiscoveredAllTime}. Processed profiles: ${state.processedProfileUrls.length}.`);\n\nreturn [{ json: { state, quota: 50, newThisRun: 0 } }];"
+      },
+      "id": "a1b2c3d4-0003-0003-0003-a1b2c3d40003",
+      "name": "Load Crawl State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 360]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://myvistage.com/login",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": true,
+              "maxRedirects": 5
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "a1b2c3d4-0004-0004-0004-a1b2c3d40004",
+      "name": "GET Login Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 360]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Extract CSRF Token & Cookies from Login Page ────────────────────────\nconst response = $input.first().json;\nconst html = typeof response.body === 'string' ? response.body : JSON.stringify(response.body);\n\nconst csrfMatch = html.match(/name=[\"'](?:_csrf|csrfToken|authenticity_token|__RequestVerificationToken)[\"']\\s+(?:value|content)=[\"']([^\"']+)[\"']/i)\n                || html.match(/[\"']csrfToken[\"']\\s*:\\s*[\"']([^\"']+)[\"']/i)\n                || html.match(/data-csrf=[\"']([^\"']+)[\"']/i);\nconst csrfToken = csrfMatch ? csrfMatch[1] : '';\n\nconst headers = response.headers || {};\nlet cookies = '';\nif (headers['set-cookie']) {\n  const cookieArr = Array.isArray(headers['set-cookie']) ? headers['set-cookie'] : [headers['set-cookie']];\n  cookies = cookieArr.map(c => c.split(';')[0]).join('; ');\n}\n\nconst state = $('Load Crawl State').first().json.state;\nreturn [{ json: { csrfToken, cookies, state, quota: 50, newThisRun: 0 } }];"
+      },
+      "id": "a1b2c3d4-0005-0005-0005-a1b2c3d40005",
+      "name": "Extract CSRF Token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 360]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://myvistage.com/login",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/x-www-form-urlencoded" },
+            { "name": "Cookie", "value": "={{ $json.cookies }}" },
+            { "name": "Referer", "value": "https://myvistage.com/login" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "form",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "email", "value": "={{ $env.VISTAGE_EMAIL }}" },
+            { "name": "password", "value": "={{ $env.VISTAGE_PASSWORD }}" },
+            { "name": "_csrf", "value": "={{ $json.csrfToken }}" }
+          ]
+        },
+        "options": {
+          "redirect": { "redirect": { "followRedirects": true, "maxRedirects": 5 } },
+          "response": { "response": { "fullResponse": true } }
+        }
+      },
+      "id": "a1b2c3d4-0006-0006-0006-a1b2c3d40006",
+      "name": "POST Login",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 360]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Extract Auth Session Cookie ──────────────────────────────────────────\nconst response = $input.first().json;\nconst headers = response.headers || {};\n\nlet sessionCookie = '';\nif (headers['set-cookie']) {\n  const cookieArr = Array.isArray(headers['set-cookie']) ? headers['set-cookie'] : [headers['set-cookie']];\n  sessionCookie = cookieArr.map(c => c.split(';')[0]).join('; ');\n}\n\nconst prevCookies = $('Extract CSRF Token').first().json.cookies || '';\nconst allCookies = [prevCookies, sessionCookie].filter(Boolean).join('; ');\nconst html = typeof response.body === 'string' ? response.body : '';\nconst loggedIn = html.includes('dashboard') || html.includes('community') || response.statusCode === 302;\nconst state = $('Extract CSRF Token').first().json.state;\n\nconsole.log(`Login attempt — logged in: ${loggedIn}, status: ${response.statusCode}`);\nreturn [{ json: { sessionCookie: allCookies, loggedIn, state, quota: 50, newThisRun: 0 } }];"
+      },
+      "id": "a1b2c3d4-0007-0007-0007-a1b2c3d40007",
+      "name": "Extract Session Cookie",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 360]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://myvistage.com/groups/?artificial-intelligence-network/members/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Cookie", "value": "={{ $json.sessionCookie }}" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml" },
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } }
+        }
+      },
+      "id": "a1b2c3d4-0008-0008-0008-a1b2c3d40008",
+      "name": "GET AI Network Members",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://myvistage.com/groups/?entrepreneurs-and-small-business-network/members/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Cookie", "value": "={{ $('Extract Session Cookie').first().json.sessionCookie }}" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml" },
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } }
+        }
+      },
+      "id": "a1b2c3d4-0008b-0008b-0008b-a1b2c3d40008b",
+      "name": "GET Entrepreneurs Network Members",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 420]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://myvistage.com/groups/?manufacturing-network/members/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Cookie", "value": "={{ $('Extract Session Cookie').first().json.sessionCookie }}" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml" },
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } }
+        }
+      },
+      "id": "a1b2c3d4-0008c-0008c-0008c-a1b2c3d40008c",
+      "name": "GET Manufacturing Network Members",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 540]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Parse Profile URLs from All Network Member Pages ─────────────────────\nconst items = $input.all();\nconst state = $('Extract Session Cookie').first().json.state;\nconst sessionCookie = $('Extract Session Cookie').first().json.sessionCookie;\n\nconst alreadyProcessed = new Set(state.processedProfileUrls || []);\nconst ownProfile = 'jperez48';\nconst profilePattern = /https:\\/\\/myvistage\\.com\\/profile\\/\\?[^\\/]+\\/$/;\n\nconst allUrls = new Set();\n\nfor (const item of items) {\n  const html = typeof item.json.body === 'string' ? item.json.body : '';\n  const matches = [...html.matchAll(/href=\"(\\/profile\\/\\?[^\"]+\\/)\"/gi)];\n  for (const m of matches) {\n    const url = 'https://myvistage.com' + m[1];\n    if (!url.includes(ownProfile) &&\n        !url.includes('/calendar') && !url.includes('/friends') &&\n        !url.includes('/notifications') && !url.includes('/messages') &&\n        profilePattern.test(url) &&\n        !alreadyProcessed.has(url)) {\n      allUrls.add(url);\n    }\n  }\n}\n\nconst newUrls = [...allUrls].slice(0, 50);\nconsole.log(`Found ${allUrls.size} new profile URLs across all networks. Processing ${newUrls.length}.`);\n\nif (newUrls.length === 0) return [];\n\nreturn newUrls.map(url => ({ json: { profileUrl: url, sessionCookie, state } }));"
+      },
+      "id": "a1b2c3d4-0009-0009-0009-a1b2c3d40009",
+      "name": "Parse Profile URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2060, 420]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "a1b2c3d4-0010-0010-0010-a1b2c3d40010",
+      "name": "Profile Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [2280, 420]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.profileUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Cookie", "value": "={{ $json.sessionCookie }}" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml" },
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } }
+        }
+      },
+      "id": "a1b2c3d4-0011-0011-0011-a1b2c3d40011",
+      "name": "GET Profile Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2500, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Extract Profile Data (PeepSo / myvistage.com structure) ──────────────\nconst response = $input.first().json;\nconst prevData = $('Profile Loop').first().json;\nconst html = typeof response.body === 'string' ? response.body : '';\n\n// Name: from page title or span.notranslate\nconst nameFromTitle = (html.match(/<title>(?:\\(\\d+\\)\\s*)?([^|<-]+)/i) || [])[1]?.trim() || '';\nconst nameFromSpan = (html.match(/<span[^>]*class=\"notranslate\"[^>]*>([^<]+)<\\/span>/i) || [])[1]?.trim() || '';\nconst fullName = nameFromSpan || nameFromTitle || 'Unknown';\n\n// Title + Company: from p.profile_user_title (format: Title<br>Company)\nconst titleCompanyMatch = html.match(/<p[^>]*class=\"[^\"]*profile_user_title[^\"]*\"[^>]*>(.*?)<\\/p>/is);\nlet jobTitle = '', company = '';\nif (titleCompanyMatch) {\n  const parts = titleCompanyMatch[1].split(/<br\\s*\\/?>/i).map(s => s.replace(/<[^>]+>/g, '').trim());\n  jobTitle = parts[0] || '';\n  company = parts[1] || '';\n}\n\n// Extract structured sections (About me, Company, Networks)\nconst sectionData = {};\nconst sectionMatches = [...html.matchAll(/<[^>]*class=\"[^\"]*ps-profile__header[^\"]*vistage-profile-header[^\"]*\"[^>]*>([^<]+)<\\/[^>]+>([\\s\\S]*?)(?=<[^>]*class=\"[^\"]*ps-profile__header|$)/gi)];\nfor (const m of sectionMatches) {\n  const key = m[1].trim();\n  const content = m[2].replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim();\n  sectionData[key] = content;\n}\n\nconst companySection = sectionData['Company'] || '';\nconst aboutSection = sectionData['About me'] || '';\nconst networksSection = sectionData['Networks'] || '';\n\nconst industry = (companySection.match(/Industry:\\s*([^\\n]+)/) || [])[1]?.trim() || '';\nconst role = (companySection.match(/Role:\\s*([^\\n]+)/) || [])[1]?.trim() || '';\nconst bizType = (companySection.match(/Business Type:\\s*([^\\n]+)/) || [])[1]?.trim() || '';\nconst locMatch = companySection.match(/([A-Za-z ]+,\\s*[A-Za-z ]+\\d{5})/);\nconst location = locMatch ? locMatch[1].trim() : '';\nconst bio = aboutSection.replace(/Biography:\\s*/,'').replace(/Business Description:.*/s,'').trim().substring(0, 200);\nconst bizDesc = (aboutSection.match(/Business Description:\\s*([^\\n]+)/) || [])[1]?.trim() || '';\nconst networks = networksSection.split(/\\n|,/).map(s => s.trim()).filter(s => s.includes('Network')).join(', ');\n\n// Dedup check by name+company\nconst state = prevData.state || {};\nconst nameKey = `${fullName.toLowerCase()}|${company.toLowerCase()}`;\nconst alreadyByName = (state.processedNameCompanyKeys || []).includes(nameKey);\n\nif (alreadyByName || fullName === 'Unknown') {\n  console.log(`Skipping ${fullName} — already processed or unknown`);\n  return [];\n}\n\nreturn [{\n  json: {\n    profileUrl: prevData.profileUrl,\n    fullName, jobTitle, company, industry, role, bizType, location, bio, bizDesc, networks,\n    state: prevData.state,\n    nameKey\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0012-0012-0012-a1b2c3d40012",
+      "name": "Extract Profile Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2720, 320]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.ANTHROPIC_API_KEY }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-haiku-4-5-20251001\",\n  \"max_tokens\": 600,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"You are a B2B sales analyst for CRM Experts Online, a CRM/ERP/AI consulting firm. Score this Vistage member for fit. Return ONLY a JSON object with these fields:\\n- crmFitScore: integer 1-10\\n- erpFitScore: integer 1-10\\n- aiFitScore: integer 1-10\\n- opportunityTier: HOT | WARM | COLD\\n- relevantTopics: comma-separated keywords\\n- summary: one sentence about their business\\n- buyingSignals: one sentence on why they might need CRM/ERP/AI\\n\\nScoring: 8-10=decision-maker in mfg/distribution/finance/tech with growth signals. 5-7=relevant role, moderate signals. 1-4=consulting/coaching/no signals.\\n\\nProfile:\\nName: {{ $json.fullName }}\\nTitle: {{ $json.jobTitle }}\\nCompany: {{ $json.company }}\\nIndustry: {{ $json.industry }}\\nRole: {{ $json.role }}\\nBusiness Type: {{ $json.bizType }}\\nNetworks: {{ $json.networks }}\\nBio: {{ $json.bio }}\\nBusiness Description: {{ $json.bizDesc }}\\n\\nReturn ONLY valid JSON.\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0013-0013-0013-a1b2c3d40013",
+      "name": "Claude AI Scoring",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2940, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Parse AI Score & Format Row for Google Sheets ───────────────────────\nconst aiResponse = $input.first().json;\nconst profile = $('Extract Profile Data').first().json;\n\nlet ai = {};\ntry {\n  const text = aiResponse?.content?.[0]?.text || '{}';\n  ai = JSON.parse(text.replace(/```json|```/g, '').trim());\n} catch(e) {\n  ai = { crmFitScore: 5, erpFitScore: 5, aiFitScore: 5, opportunityTier: 'WARM', relevantTopics: '', summary: '', buyingSignals: '' };\n}\n\nconst today = new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });\n\nreturn [{\n  json: {\n    dateDiscovered: today,\n    fullName: profile.fullName,\n    jobTitle: profile.jobTitle,\n    company: profile.company,\n    email: '',\n    phone: '',\n    profileUrl: profile.profileUrl,\n    groups: profile.networks,\n    industry: profile.industry,\n    crmFitScore: parseInt(ai.crmFitScore) || 5,\n    erpFitScore: parseInt(ai.erpFitScore) || 5,\n    aiFitScore: parseInt(ai.aiFitScore) || 5,\n    opportunityTier: ai.opportunityTier || 'WARM',\n    relevantTopics: ai.relevantTopics || '',\n    summaryOfDiscussions: ai.summary || '',\n    buyingSignals: ai.buyingSignals || '',\n    sourceThreadUrl: 'https://myvistage.com/groups/?artificial-intelligence-network/members/',\n    lastChecked: new Date().toISOString(),\n    status: 'New',\n    _profileUrl: profile.profileUrl,\n    _nameKey: profile.nameKey,\n    _state: profile.state\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0014-0014-0014-a1b2c3d40014",
+      "name": "Format Sheet Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3160, 320]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "mode": "id", "value": "={{ $env.VISTAGE_SHEET_ID }}" },
+        "sheetName": { "__rl": true, "mode": "name", "value": "Prospects" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date Discovered": "={{ $json.dateDiscovered }}",
+            "Full Name": "={{ $json.fullName }}",
+            "Title": "={{ $json.jobTitle }}",
+            "Company": "={{ $json.company }}",
+            "Email": "={{ $json.email }}",
+            "Phone": "={{ $json.phone }}",
+            "Profile URL": "={{ $json.profileUrl }}",
+            "Group(s)": "={{ $json.groups }}",
+            "Industry": "={{ $json.industry }}",
+            "CRM Fit Score": "={{ $json.crmFitScore }}",
+            "ERP Fit Score": "={{ $json.erpFitScore }}",
+            "AI Fit Score": "={{ $json.aiFitScore }}",
+            "Opportunity Tier": "={{ $json.opportunityTier }}",
+            "Relevant Topics": "={{ $json.relevantTopics }}",
+            "Summary of Discussions": "={{ $json.summaryOfDiscussions }}",
+            "Buying Signals": "={{ $json.buyingSignals }}",
+            "Source Thread URL(s)": "={{ $json.sourceThreadUrl }}",
+            "Last Checked": "={{ $json.lastChecked }}",
+            "Status": "={{ $json.status }}"
+          }
+        },
+        "options": { "valueInputMode": "USER_ENTERED" }
+      },
+      "id": "a1b2c3d4-0015-0015-0015-a1b2c3d40015",
+      "name": "Append to Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [3380, 320],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Save State Back to n8n Static Data ───────────────────────────────────\nconst items = $input.all();\nif (!items.length) return [{ json: { saved: false } }];\n\nconst staticData = $getWorkflowStaticData('global');\n\n// Collect all newly processed profiles from this run\nconst newProfileUrls = items.map(i => i.json._profileUrl).filter(Boolean);\nconst newNameKeys = items.map(i => i.json._nameKey).filter(Boolean);\n\nconst existingProfiles = new Set(staticData.processedProfileUrls || []);\nconst existingKeys = new Set(staticData.processedNameCompanyKeys || []);\n\nnewProfileUrls.forEach(u => existingProfiles.add(u));\nnewNameKeys.forEach(k => existingKeys.add(k));\n\nstaticData.processedProfileUrls = [...existingProfiles];\nstaticData.processedNameCompanyKeys = [...existingKeys];\nstaticData.totalDiscoveredAllTime = (staticData.totalDiscoveredAllTime || 0) + items.length;\nstaticData.lastRunAt = new Date().toISOString();\nstaticData.lastRunNewCount = items.length;\nstaticData.runHistory = [\n  ...((staticData.runHistory || []).slice(-49)),\n  { runAt: new Date().toISOString(), newCount: items.length, networksVisited: ['AI Network', 'Entrepreneurs Network', 'Manufacturing Network'] }\n];\n\nconsole.log(`State saved. This run: ${items.length}. All-time: ${staticData.totalDiscoveredAllTime}.`);\nreturn [{ json: { saved: true, thisRun: items.length, totalAllTime: staticData.totalDiscoveredAllTime } }];"
+      },
+      "id": "a1b2c3d4-0016-0016-0016-a1b2c3d40016",
+      "name": "Save State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3600, 320]
+    }
+  ],
+  "connections": {
+    "Every Hour": {
+      "main": [[{ "node": "Time Window Check", "type": "main", "index": 0 }]]
+    },
+    "Time Window Check": {
+      "main": [[{ "node": "Load Crawl State", "type": "main", "index": 0 }]]
+    },
+    "Load Crawl State": {
+      "main": [
+        [
+          { "node": "GET AI Network Members", "type": "main", "index": 0 },
+          { "node": "GET Entrepreneurs Network Members", "type": "main", "index": 0 },
+          { "node": "GET Manufacturing Network Members", "type": "main", "index": 0 },
+          { "node": "GET Login Page", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "GET Login Page": {
+      "main": [[{ "node": "Extract CSRF Token", "type": "main", "index": 0 }]]
+    },
+    "Extract CSRF Token": {
+      "main": [[{ "node": "POST Login", "type": "main", "index": 0 }]]
+    },
+    "POST Login": {
+      "main": [[{ "node": "Extract Session Cookie", "type": "main", "index": 0 }]]
+    },
+    "Extract Session Cookie": {
+      "main": [
+        [
+          { "node": "GET AI Network Members", "type": "main", "index": 0 },
+          { "node": "GET Entrepreneurs Network Members", "type": "main", "index": 0 },
+          { "node": "GET Manufacturing Network Members", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "GET AI Network Members": {
+      "main": [[{ "node": "Parse Profile URLs", "type": "main", "index": 0 }]]
+    },
+    "GET Entrepreneurs Network Members": {
+      "main": [[{ "node": "Parse Profile URLs", "type": "main", "index": 0 }]]
+    },
+    "GET Manufacturing Network Members": {
+      "main": [[{ "node": "Parse Profile URLs", "type": "main", "index": 0 }]]
+    },
+    "Parse Profile URLs": {
+      "main": [[{ "node": "Profile Loop", "type": "main", "index": 0 }]]
+    },
+    "Profile Loop": {
+      "main": [
+        [{ "node": "GET Profile Page", "type": "main", "index": 0 }]
+      ]
+    },
+    "GET Profile Page": {
+      "main": [[{ "node": "Extract Profile Data", "type": "main", "index": 0 }]]
+    },
+    "Extract Profile Data": {
+      "main": [[{ "node": "Claude AI Scoring", "type": "main", "index": 0 }]]
+    },
+    "Claude AI Scoring": {
+      "main": [[{ "node": "Format Sheet Row", "type": "main", "index": 0 }]]
+    },
+    "Format Sheet Row": {
+      "main": [[{ "node": "Append to Google Sheet", "type": "main", "index": 0 }]]
+    },
+    "Append to Google Sheet": {
+      "main": [[{ "node": "Save State", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "tags": [
+    { "name": "prospecting" },
+    { "name": "vistage" },
+    { "name": "crm-experts" }
+  ]
+}

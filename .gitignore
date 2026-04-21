@@ -1,0 +1,19 @@
+# ─── Secrets — NEVER commit these ───────────────────────────────────────────
+.env
+credentials.json
+token.json
+alert-config.json
+
+# ─── Runtime / machine-specific state ────────────────────────────────────────
+state.json
+browser-state.json
+run.log
+last_stdout.txt
+last_stderr.txt
+
+# ─── Backups & data exports ───────────────────────────────────────────────────
+backup_*.json
+prospects_to_paste.tsv
+
+# ─── Node ─────────────────────────────────────────────────────────────────────
+node_modules/

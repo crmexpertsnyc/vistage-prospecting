@@ -1,0 +1,11 @@
+{
+  "_instructions": "Copy this file to alert-config.json and fill in your credentials.",
+  "_gmail_help": "For Gmail: enable 2FA → Google Account → Security → App Passwords → create one for 'Vistage Scraper'. Use that 16-char password as smtp_pass.",
+
+  "smtp_host":   "smtp.gmail.com",
+  "smtp_port":   587,
+  "smtp_secure": false,
+  "smtp_user":   "your-gmail@gmail.com",
+  "smtp_pass":   "xxxx xxxx xxxx xxxx",
+  "alert_to":    "jperez@service-push.com"
+}

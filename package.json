@@ -1,0 +1,18 @@
+{
+  "name": "vistage-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "auth": "node auth.js",
+    "start": "node scraper.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "googleapis": "^144.0.0",
+    "nodemailer": "^8.0.3",
+    "open": "^10.1.0",
+    "playwright": "^1.44.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}
