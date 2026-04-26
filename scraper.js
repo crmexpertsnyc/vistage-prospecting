@@ -33,8 +33,8 @@ const EXECUTION_BUDGET_MS       = 60 * 60 * 1000;   // 60 minutes
 const WARN_AT_MS                = 57 * 60 * 1000;   // 57 minutes → wind-down
 const ACTIVE_HOURS_START        = 2;                 // 2 AM ET
 const ACTIVE_HOURS_END          = 23;                // 11 PM ET
-const QUOTA_PER_RUN             = 6;                 // ⚠️ conservative — threads/comments only
-const DAILY_PROFILE_QUOTA       = 12;                // 2 logins × 6 = 12 max/day
+const QUOTA_PER_RUN             = 11;                // ⚠️ conservative — threads/comments only
+const DAILY_PROFILE_QUOTA       = 22;                // 2 logins × 11 = 22 max/day
 const NETWORK_REDISCOVER_EVERY  = 5;                 // re-crawl groups page every N runs
 const ZERO_RUN_DEEP_SCAN_AFTER  = 3;                 // consecutive zero runs before 120-day deep scan
 const ACPAGE_MAX_NORMAL         = 3;                 // paginated feed pages in normal mode (?acpage=1..3 ≈ 60 days)
